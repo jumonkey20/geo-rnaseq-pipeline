@@ -33,6 +33,8 @@ geo-rnaseq-pipeline/
 │
 ├── pipeline.py              # Main automated execution script
 └── README.md                # Project documentation
+
+```
 Requirements & Dependencies
 This pipeline requires Python 3.10+ and the following core libraries:
 
