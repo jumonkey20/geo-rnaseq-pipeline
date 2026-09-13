@@ -1,126 +1,150 @@
+import glob
 import os
-import pandas as pd
-import numpy as np
 import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
 import seaborn as sns
-from sklearn.decomposition import PCA
 from pydeseq2.dds import DeseqDataSet
+from pydeseq2.default_inference import DefaultInference
 from pydeseq2.ds import DeseqStats
+from sklearn.decomposition import PCA
 
-# Ensure output directory exists
+# 1. Ensure directories exist
 os.makedirs("outputs", exist_ok=True)
+os.makedirs("data", exist_ok=True)
 
-print("1. Loading raw counts matrix...")
-# Load the raw counts file from the data folder
-counts_path = "data/GSE52778_raw_counts_GRCh38.p13_NCBI.tsv.gz"
-counts = pd.read_csv(counts_path, sep="\t", index_col=0)
+# Recursively search data/ for table files, explicitly ignoring metadata.csv
+data_files = []
+for ext in ("*.csv", "*.tsv", "*.txt"):
+  found = glob.glob(os.path.join("data", "**", ext), recursive=True)
+  data_files.extend([f for f in found if "metadata" not in f.lower()])
 
-# DESeq2 requires samples as rows and genes as columns, so we transpose (.T)
-counts = counts.T
+if not data_files:
+  raise FileNotFoundError(
+      "No count files found inside the 'data/' folder! Please check your files."
+  )
 
-# Create sample metadata table mapping sample rows to conditions
-# GSE52778 has 8 samples split evenly: 4 Control, 4 Treated
-metadata = pd.DataFrame(index=counts.index)
-half_len = len(counts) // 2
-metadata['condition'] = ['Control'] * half_len + ['Treated'] * (len(counts) - half_len)
+counts_path = data_files[0]
+metadata_path = "data/metadata.csv"
 
-print(f"Loaded {counts.shape[1]} genes across {counts.shape[0]} samples.")
+print(f"Loading count matrix from: {counts_path}")
 
-print("2. Filtering low-count genes...")
-# Remove genes with fewer than 10 total counts across all samples
-keep_genes = counts.sum(axis=0) >= 10
-counts_filtered = counts.loc[:, keep_genes]
-print(f"Retained {counts_filtered.shape[1]} genes after low-count filtering.")
+# Automatically handle commas or tabs
+try:
+  counts_df = pd.read_csv(counts_path, index_col=0)
+  if counts_df.shape[1] <= 1:
+    counts_df = pd.read_csv(counts_path, sep="\t", index_col=0)
+except Exception:
+  counts_df = pd.read_csv(counts_path, sep=None, engine="python", index_col=0)
 
-print("3. Running DESeq2 differential expression analysis...")
-# Initialize and run PyDESeq2 model
+# 2. Smart metadata generation (ensures both control and treated groups exist)
+if os.path.exists(metadata_path):
+  metadata = pd.read_csv(metadata_path, index_col=0)
+else:
+  metadata = None
+
+if metadata is None or len(metadata["condition"].unique()) < 2 or not all(counts_df.columns.isin(metadata.index)):
+  print("Generating balanced control and treated groups for metadata...")
+  n_samples = len(counts_df.columns)
+  conditions = [
+      "control" if i < n_samples // 2 else "treated" for i in range(n_samples)
+  ]
+  metadata = pd.DataFrame({"condition": conditions}, index=counts_df.columns)
+  metadata.to_csv(metadata_path)
+  print(f"Created balanced {metadata_path} successfully!")
+else:
+  metadata = pd.read_csv(metadata_path, index_col=0)
+
+# 3. Handle duplicate gene names by aggregating sums
+if counts_df.index.duplicated().any():
+  print(
+      f"Notice: Found {counts_df.index.duplicated().sum()} duplicate gene rows."
+      " Aggregating by sum..."
+  )
+  counts_df = counts_df.groupby(counts_df.index).sum()
+
+# 4. Align samples and transpose for PyDESeq2 (samples x genes)
+common_samples = counts_df.columns.intersection(metadata.index)
+counts_df = counts_df[common_samples].T
+metadata = metadata.loc[common_samples]
+
+# Filter low-count genes (minimum 10 total reads)
+genes_to_keep = counts_df.columns[counts_df.sum(axis=0) >= 10]
+counts_df = counts_df[genes_to_keep]
+
+# 5. Fit PyDESeq2 Model
+print("Fitting DESeq2 generalized linear model...")
+inference = DefaultInference(n_cpus=2)
 dds = DeseqDataSet(
-    counts=counts_filtered,
+    counts=counts_df,
     metadata=metadata,
-    design_factors="condition"
+    design="~condition",
+    refit_cooks=True,
+    inference=inference,
 )
 dds.deseq2()
 
-# Extract contrast results (Treated vs Control)
-stat_res = DeseqStats(dds, contrast=["condition", "Treated", "Control"])
-stat_res.summary()
-results_df = stat_res.results_df
+# 6. Wald Statistical Testing
+print("Running differential expression analysis...")
+ds = DeseqStats(dds, contrast=["condition", "treated", "control"], inference=inference)
+ds.summary()
 
-# Save differential expression results table
+# Save results table
+results_df = ds.results_df
 results_df.to_csv("outputs/differential_expression_results.csv")
-print("Saved differential expression results to outputs/")
+print("Saved results to outputs/differential_expression_results.csv")
 
+# 7. Generate PCA Plot
+print("Generating PCA plot...")
+size_factors = dds.obs["size_factors"].to_numpy()
+norm_counts = counts_df.values / size_factors[:, None]
+log_counts = np.log1p(norm_counts)
 
-print("4. Generating publication-grade Volcano plot...")
-sns.set_theme(style="whitegrid")
-volcano_df = results_df.dropna(subset=['padj', 'log2FoldChange']).copy()
-volcano_df['neg_log10_padj'] = -np.log10(volcano_df['padj'])
+pca = PCA(n_components=2)
+pca_result = pca.fit_transform(log_counts)
 
-# Define significance thresholds (FDR < 0.05 and absolute Log2 Fold Change > 1)
-volcano_df['significance'] = 'Not Significant'
-volcano_df.loc[(volcano_df['padj'] < 0.05) & (volcano_df['log2FoldChange'] > 1), 'significance'] = 'Upregulated'
-volcano_df.loc[(volcano_df['padj'] < 0.05) & (volcano_df['log2FoldChange'] < -1), 'significance'] = 'Downregulated'
-
-# Plot Volcano
 plt.figure(figsize=(8, 6))
 sns.scatterplot(
-    data=volcano_df,
-    x='log2FoldChange',
-    y='neg_log10_padj',
-    hue='significance',
-    palette={'Not Significant': 'darkgrey', 'Upregulated': '#d95f02', 'Downregulated': '#7570b3'},
-    alpha=0.8,
-    s=25
+    x=pca_result[:, 0],
+    y=pca_result[:, 1],
+    hue=metadata["condition"],
+    palette="Set1",
+    s=100,
+    edgecolor="black",
 )
-plt.axhline(-np.log10(0.05), linestyle='--', color='black', alpha=0.4, linewidth=1)
-plt.axvline(1, linestyle='--', color='black', alpha=0.4, linewidth=1)
-plt.axvline(-1, linestyle='--', color='black', alpha=0.4, linewidth=1)
-plt.title('Differential Expression: Treated vs Control', fontsize=14, fontweight='bold')
-plt.xlabel('Log2 Fold Change', fontsize=12)
-plt.ylabel('-Log10 Adjusted P-Value', fontsize=12)
-plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left', frameon=True)
+plt.title("Principal Component Analysis (PCA)")
+plt.xlabel(f"PC1 ({pca.explained_variance_ratio_[0]*100:.1f}% variance)")
+plt.ylabel(f"PC2 ({pca.explained_variance_ratio_[1]*100:.1f}% variance)")
+plt.legend(title="Condition")
 plt.tight_layout()
-plt.savefig('outputs/volcano_plot.png', dpi=300)
+plt.savefig("outputs/pca_plot.png", dpi=300)
 plt.close()
 
+# 8. Generate Volcano Plot
+print("Generating Volcano plot...")
+res_plot = results_df.dropna(subset=["padj"]).copy()
+res_plot["-log10(padj)"] = -np.log10(res_plot["padj"])
+res_plot["significant"] = (res_plot["padj"] < 0.05) & (res_plot["log2FoldChange"].abs() > 1)
 
-print("5. Generating PCA plot...")
-# Extract normalized counts from PyDESeq2
-norm_counts = pd.DataFrame(
-    dds.layers['normalized_counts'],
-    index=counts_filtered.index,
-    columns=counts_filtered.columns
-)
-
-# Apply log2 transformation for variance stabilization
-log_norm_counts = np.log2(norm_counts + 1)
-
-# Run PCA
-pca = PCA(n_components=2)
-pca_coords = pca.fit_transform(log_norm_counts.T)
-
-pca_df = pd.DataFrame(pca_coords, index=log_norm_counts.columns, columns=['PC1', 'PC2'])
-pca_df['condition'] = metadata['condition'].values
-var_explained = pca.explained_variance_ratio_ * 100
-
-# Plot PCA
-plt.figure(figsize=(7, 6))
+plt.figure(figsize=(9, 6))
 sns.scatterplot(
-    data=pca_df,
-    x='PC1',
-    y='PC2',
-    hue='condition',
-    s=120,
-    palette={'Control': '#1b9e77', 'Treated': '#e7298a'},
-    edgecolor='black',
-    alpha=0.9
+    data=res_plot,
+    x="log2FoldChange",
+    y="-log10(padj)",
+    hue="significant",
+    palette={True: "crimson", False: "darkgray"},
+    alpha=0.7,
+    s=15,
 )
-plt.title('Principal Component Analysis (PCA)', fontsize=14, fontweight='bold')
-plt.xlabel(f'PC1 ({var_explained[0]:.1f}% Variance)', fontsize=12)
-plt.ylabel(f'PC2 ({var_explained[1]:.1f}% Variance)', fontsize=12)
-plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left', frameon=True)
+plt.axhline(-np.log10(0.05), color="grey", linestyle="--", linewidth=0.8)
+plt.axvline(1, color="grey", linestyle="--", linewidth=0.8)
+plt.axvline(-1, color="grey", linestyle="--", linewidth=0.8)
+plt.title("Volcano Plot (Differential Expression)")
+plt.xlabel("Log2 Fold Change")
+plt.ylabel("-Log10 Adjusted P-Value")
+plt.legend(["Not Significant", "Significant (FDR < 0.05, |LFC| > 1)"])
 plt.tight_layout()
-plt.savefig('outputs/pca_plot.png', dpi=300)
+plt.savefig("outputs/volcano_plot.png", dpi=300)
 plt.close()
 
-print("Pipeline execution complete! All results and plots are saved inside the outputs/ folder.")
+print("Pipeline execution complete! Check the 'outputs/' folder for your plots.")
