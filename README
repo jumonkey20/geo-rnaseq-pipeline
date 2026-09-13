@@ -1,59 +1,11 @@
-# GSE52778 RNA-Seq Differential Expression Pipeline
+## Results & Visualizations
 
-## Project Summary
-
-This repository contains an automated, reproducible Python pipeline designed for end-to-end transcriptomic analysis. The workflow processes raw RNA-Seq count data from the NCBI GEO dataset GSE52778, performs quality control and size-factor normalization, fits a generalized linear model using PyDESeq2, and identifies statistically significant differentially expressed genes. It utilizes pandas, scikit-learn, and seaborn to generate analytical insights and visual outputs.
-
-## Replication Guide
-
-### Prerequisites
-
-Ensure you have Python 3.10 or higher installed on your system.
-
-### Installation
-
-Clone this repository and install the required core packages via your terminal:
-
-```bash
-pip install pydeseq2 pandas numpy matplotlib seaborn scikit-learn
-Data Setup
-Place your extracted raw count matrix file inside the data/ folder.
-
-If no metadata file is provided, the script will automatically generate a balanced experimental design matrix (metadata.csv) inside the data/ folder.
-
-Execution
-Run the main script from your terminal:
-
-Bash
-python pipeline.py
-This will parse the data, execute the DESeq2 statistical model, and export all results and plots directly into the outputs/ folder.
-
-Results & Visualizations
-Principal Component Analysis (PCA)
+### Principal Component Analysis (PCA)
 Global sample variance and clustering based on log-transformed, size-factor normalized counts.
 
-Volcano Plot
-Differential expression significance mapping highlighting genes meeting the false discovery rate (padj < 0.05) and log2 fold-change thresholds (|LFC| > 1).
+![PCA Plot](outputs/pca_plot.png)
 
-<img src="https://raw.githubusercontent.com/jumonkey20/geo-rnaseq-pipeline/main/outputs/pca_plot.png" alt="PCA Plot" width="700"/>
+### Volcano Plot
+Differential expression significance mapping highlighting genes meeting the false discovery rate ($p_{\text{adj}} < 0.05$) and log2 fold-change thresholds ($|\text{LFC}| > 1$).
 
-<img src="https://raw.githubusercontent.com/jumonkey20/geo-rnaseq-pipeline/main/outputs/volcano_plot.png" alt="Volcano Plot" width="700"/>
-
-Project Structure
-Plaintext
-geo-rnaseq-pipeline/
-│
-├── data/                    # Raw count matrices and auto-generated metadata
-│   └── metadata.csv         # Experimental design matrix
-│
-├── outputs/                 # Generated plots and analytical results
-│   ├── pca_plot.png         # Sample-level PCA variance plot
-│   ├── volcano_plot.png     # Differential expression volcano plot
-│   └── differential_expression_results.csv # Full statistical table
-│
-├── pipeline.py              # Main automated execution script
-└── README.md                # Project documentation
-Author
-Ali Al-Jumaili
-
-BSc Biomedical Science | University of Surrey
+![Volcano Plot](outputs/volcano_plot.png)
