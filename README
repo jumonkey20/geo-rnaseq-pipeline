@@ -35,6 +35,10 @@ Global sample variance and clustering based on log-transformed, size-factor norm
 Volcano Plot
 Differential expression significance mapping highlighting genes meeting the false discovery rate (padj < 0.05) and log2 fold-change thresholds (|LFC| > 1).
 
+![PCA Plot](https://raw.githubusercontent.com/jumonkey20/geo-rnaseq-pipeline/main/outputs/pca_plot.png)
+
+![Volcano Plot](https://raw.githubusercontent.com/jumonkey20/geo-rnaseq-pipeline/main/outputs/volcano_plot.png)
+
 Project Structure
 Plaintext
 geo-rnaseq-pipeline/
